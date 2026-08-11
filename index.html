@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Uzaktan Kontrol</title>
+
+<!-- ================= PWA / "Uygulama gibi" ayarları ================= -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0f1115">
+<meta name="background-color" content="#0f1115">
+<!-- Android/Chrome: adres çubuğu olmadan, kendi ikonuyla açılması için -->
+<meta name="mobile-web-app-capable" content="yes">
+<!-- iOS Safari'de de "Ana Ekrana Ekle" düzgün çalışsın diye (zararsız, Android'i etkilemez) -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Klima Kontrol">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png">
+
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2a2f3a;
+    --text:#e9ebf0; --dim:#8b93a3; --accent:#ff8a3d; --accent2:#2dd4bf;
+    --danger:#e5484d; --ok:#3ecf8e; --radius:16px;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  body{
+    margin:0;
+    background:radial-gradient(1200px 600px at 50% -10%, #1c2130 0%, var(--bg) 60%);
+    color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    min-height:100vh; padding:18px 14px 60px;
+  }
+  .wrap{max-width:460px;margin:0 auto;}
+  .brand{display:flex;align-items:center;gap:10px;margin-bottom:18px;}
+  .brand .dot{width:10px;height:10px;border-radius:50%;background:var(--dim);flex:none;transition:background .2s;}
+  .brand .dot.on{background:var(--ok);box-shadow:0 0 10px var(--ok);}
+  .brand .dot.err{background:var(--danger);box-shadow:0 0 10px var(--danger);}
+  .brand h1{font-size:1.05rem;font-weight:700;margin:0;letter-spacing:.2px;}
+  .brand span{font-size:.72rem;color:var(--dim);}
+
+  .card{
+    background:linear-gradient(180deg, var(--panel), var(--panel2));
+    border:1px solid var(--line); border-radius:var(--radius); padding:16px; margin-bottom:14px;
+  }
+  .card h2{font-size:.72rem;text-transform:uppercase;letter-spacing:.14em;color:var(--dim);margin:0 0 12px;font-weight:700;}
+  .card h3{font-size:.78rem;color:var(--dim);margin:14px 0 8px;font-weight:600;}
+
+  .tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;}
+  .tab{
+    flex:1;min-width:80px;text-align:center;padding:11px 6px;border-radius:12px;
+    background:var(--panel);border:1px solid var(--line);color:var(--dim);
+    font-size:.8rem;font-weight:600;cursor:pointer;user-select:none;
+  }
+  .tab.active{background:var(--accent);border-color:var(--accent);color:#1a1206;}
+
+  label{display:block;font-size:.72rem;color:var(--dim);margin:10px 0 5px;}
+  input[type=text],input[type=number],input[type=password],select,input[type=time]{
+    width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);
+    background:#0d0f14;color:var(--text);font-size:.92rem;
+  }
+  input:focus,select:focus{outline:2px solid var(--accent2);outline-offset:1px;}
+  .row2{display:grid;grid-template-columns:2fr 1fr;gap:10px;}
+  .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;}
+
+  .btn{
+    display:flex;align-items:center;justify-content:center;
+    padding:13px 10px;border-radius:12px;border:none;
+    font-size:.88rem;font-weight:700;cursor:pointer;color:#fff;
+    background:var(--panel2);border:1px solid var(--line);transition:transform .06s;
+  }
+  .btn:active{transform:scale(.96);}
+  .btn.primary{background:var(--accent);color:#1a1206;border-color:var(--accent);}
+  .btn.full{width:100%;margin-top:12px;}
+  .btn[disabled]{opacity:.4;pointer-events:none;}
+  .btn.small{padding:9px 6px;font-size:.78rem;}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;}
+
+  .statusline{font-size:.85rem;color:var(--dim);text-align:center;margin:2px 0 14px;}
+  .statusline b{color:var(--text);}
+
+  .lockNote{
+    font-size:.76rem;color:var(--dim);background:#0d0f14;border:1px dashed var(--line);
+    border-radius:10px;padding:10px;margin-top:10px;line-height:1.5;
+  }
+  .toast{
+    position:fixed;left:50%;bottom:20px;transform:translateX(-50%);
+    background:#0d0f14;border:1px solid var(--line);color:var(--text);
+    padding:10px 16px;border-radius:10px;font-size:.82rem;opacity:0;
+    pointer-events:none;transition:opacity .25s;z-index:50;max-width:90vw;text-align:center;
+  }
+  .toast.show{opacity:1;}
+  .padArea{display:none;}
+  .padArea.show{display:block;}
+
+  .listRow{
+    display:flex;align-items:center;justify-content:space-between;gap:8px;
+    background:#0d0f14;border:1px solid var(--line);border-radius:10px;
+    padding:10px 12px;margin-bottom:8px;font-size:.82rem;
+  }
+  .listRow .lbl{flex:1;}
+  .listRow .del{
+    width:24px;height:24px;border-radius:50%;background:var(--danger);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-size:.9rem;cursor:pointer;flex:none;
+  }
+  .dayPick{display:flex;gap:5px;flex-wrap:wrap;justify-content:center;margin:8px 0;}
+  .dayPick label{display:flex;flex-direction:column;align-items:center;font-size:.68rem;color:var(--dim);margin:0;}
+  .dayPick input{width:18px;height:18px;}
+  .empty{font-size:.8rem;color:var(--dim);text-align:center;padding:8px 0;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="brand">
+    <div class="dot" id="dot"></div>
+    <div>
+      <h1>Uzaktan Kontrol</h1>
+      <span id="brandSub">Bağlı değil</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>MQTT Bağlantısı</h2>
+    <label>Host / Sunucu (WebSocket)</label>
+    <input type="text" id="mHost" placeholder="orn. broker.hivemq.com">
+    <div class="row2">
+      <div><label>Port</label><input type="number" id="mPort" value="8000"></div>
+      <div><label>WSS?</label>
+        <select id="mWss">
+          <option value="evet">Evet</option>
+          <option value="hayir">Hayır</option>
+        </select>
+      </div>
+    </div>
+    <label>Kullanıcı Adı</label>
+    <input type="text" id="mUser">
+    <label>Şifre</label>
+    <input type="password" id="mPass">
+    <button class="btn primary full" id="connectBtn" onclick="doConnect()">Bağlan</button>
+    <div class="statusline" id="statusLine">Ayarları gir ve "Bağlan"a bas.</div>
+    <div class="lockNote">Menüde gezinmek için bağlanmana gerek yok — sadece komut göndermek
+      (düğmelere basmak) için bağlantı gerekiyor. ESP tarafındaki MQTT ayarlarıyla
+      (Host/Port/Kullanıcı/Şifre) aynısını gir.</div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('ac')">Klima</div>
+    <div class="tab" onclick="showTab('rc5')">TV Kumandası</div>
+    <div class="tab" onclick="showTab('dev')">Cihazlar</div>
+  </div>
+
+  <!-- ===================== KLIMA PANELI ===================== -->
+  <div id="tabAc" class="padArea show">
+    <div class="card">
+      <h2>Durum</h2>
+      <div class="statusline">Güç: <b id="acPowerLbl">-</b> · Mod: <b id="acModeLbl">-</b> ·
+        Sıcaklık: <b id="acTempLbl">-</b>°C · Fan: <b id="acFanLbl">-</b></div>
+
+      <div class="grid2">
+        <button class="btn" style="background:#2f8f46" onclick="sendAc('power=1')">Aç</button>
+        <button class="btn" style="background:#c0392b" onclick="sendAc('power=0')">Kapat</button>
+      </div>
+
+      <h3>Sıcaklık</h3>
+      <div class="grid2">
+        <button class="btn" onclick="sendAc('temp=down')">− Sıcaklık</button>
+        <button class="btn" onclick="sendAc('temp=up')">+ Sıcaklık</button>
+      </div>
+
+      <h3>Fan</h3>
+      <div class="grid2">
+        <button class="btn" onclick="sendAc('fan=down')">− Fan</button>
+        <button class="btn" onclick="sendAc('fan=up')">+ Fan</button>
+      </div>
+
+      <h3>Mod</h3>
+      <div class="grid3">
+        <button class="btn small" onclick="sendAc('mode=cool')">Soğutma</button>
+        <button class="btn small" onclick="sendAc('mode=heat')">Isıtma</button>
+        <button class="btn small" onclick="sendAc('mode=dry')">Nem Alma</button>
+      </div>
+
+      <button class="btn full" style="background:#555" onclick="sendAc('swing=toggle')">Swap (Salınım)</button>
+    </div>
+
+    <!-- Zamanlayici (Otomatik Kapanma/Acilma) -->
+    <div class="card">
+      <h2>Otomatik Kapanma / Açılma</h2>
+      <div class="statusline" id="timerStatusLbl">Zamanlayıcı bilgisi bekleniyor...</div>
+
+      <h3>Otomatik Kapanma</h3>
+      <div class="row3">
+        <input type="number" id="offH" min="0" max="23" value="0" placeholder="saat">
+        <input type="number" id="offM" min="0" max="59" value="30" placeholder="dk">
+        <button class="btn small primary" onclick="setTimer('off')">Kur</button>
+      </div>
+      <button class="btn full small" style="background:#e53935" onclick="cancelTimer('off')">Kapanma Zamanlayıcısını İptal Et</button>
+
+      <h3>Otomatik Açılma</h3>
+      <div class="row3">
+        <input type="number" id="onH" min="0" max="23" value="0" placeholder="saat">
+        <input type="number" id="onM" min="0" max="59" value="30" placeholder="dk">
+        <button class="btn small primary" onclick="setTimer('on')">Kur</button>
+      </div>
+      <button class="btn full small" style="background:#e53935" onclick="cancelTimer('on')">Açılma Zamanlayıcısını İptal Et</button>
+    </div>
+
+    <!-- Zamanlanmis Gorevler -->
+    <div class="card">
+      <h2>Zamanlanmış Görevler</h2>
+      <div id="schedList"><div class="empty">Görev listesi bekleniyor...</div></div>
+
+      <h3>Yeni Görev Ekle</h3>
+      <label>Saat</label>
+      <input type="time" id="schedTime">
+      <label>Ne yapsın?</label>
+      <select id="schedAction">
+        <option value="on">Aç / Ayarları Uygula</option>
+        <option value="off">Kapat</option>
+      </select>
+      <label>Mod (sadece "Aç" için)</label>
+      <select id="schedMode">
+        <option value="0">Soğutma</option>
+        <option value="4">Isıtma</option>
+        <option value="1">Nem Alma</option>
+      </select>
+      <label>Sıcaklık (sadece "Aç" için)</label>
+      <input type="number" id="schedTemp" min="16" max="30" value="24">
+      <label>Fan (sadece "Aç" için)</label>
+      <select id="schedFan">
+        <option value="0">Düşük</option>
+        <option value="1">Orta</option>
+        <option value="2">Yüksek</option>
+        <option value="3" selected>Otomatik</option>
+      </select>
+      <label>Hangi günler? (hiçbirini seçmezsen, sadece bir kere çalışıp kendini siler)</label>
+      <div class="dayPick" id="dayPick">
+        <label>Paz<input type="checkbox" data-day="0"></label>
+        <label>Pzt<input type="checkbox" data-day="1"></label>
+        <label>Sal<input type="checkbox" data-day="2"></label>
+        <label>Çar<input type="checkbox" data-day="3"></label>
+        <label>Per<input type="checkbox" data-day="4"></label>
+        <label>Cum<input type="checkbox" data-day="5"></label>
+        <label>Cmt<input type="checkbox" data-day="6"></label>
+      </div>
+      <button class="btn full primary" onclick="addSchedule()">+ Görev Ekle</button>
+    </div>
+  </div>
+
+  <!-- ===================== RC5 TV KUMANDASI ===================== -->
+  <div id="tabRc5" class="padArea">
+    <div class="card">
+      <h2>TV Kumandası (RC5)</h2>
+      <div class="grid3" style="margin-bottom:8px;">
+        <button class="btn" onclick="sendRc5(0)">0</button>
+        <button class="btn" onclick="sendRc5(1)">1</button>
+        <button class="btn" onclick="sendRc5(2)">2</button>
+        <button class="btn" onclick="sendRc5(3)">3</button>
+        <button class="btn" onclick="sendRc5(4)">4</button>
+        <button class="btn" onclick="sendRc5(5)">5</button>
+        <button class="btn" onclick="sendRc5(6)">6</button>
+        <button class="btn" onclick="sendRc5(7)">7</button>
+        <button class="btn" onclick="sendRc5(8)">8</button>
+        <button class="btn" onclick="sendRc5(9)">9</button>
+      </div>
+      <div class="grid2">
+        <button class="btn" style="background:#c0392b" onclick="sendRc5(12)">Güç (Standby)</button>
+        <button class="btn" style="background:#8e24aa" onclick="sendRc5(13)">Sessiz</button>
+      </div>
+      <div class="grid2" style="margin-top:8px;">
+        <button class="btn" onclick="sendRc5(16)">Ses +</button>
+        <button class="btn" onclick="sendRc5(17)">Ses −</button>
+      </div>
+      <div class="grid2" style="margin-top:8px;">
+        <button class="btn" onclick="sendRc5(32)">Kanal +</button>
+        <button class="btn" onclick="sendRc5(33)">Kanal −</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Ek Öğrenilmiş Tuşlar</h2>
+      <div id="rc5ExtraList"><div class="empty">Liste bekleniyor...</div></div>
+    </div>
+  </div>
+
+  <!-- ===================== CIHAZLAR ===================== -->
+  <div id="tabDev" class="padArea">
+    <div class="card">
+      <h2>Eklenen Cihazlar</h2>
+      <div id="deviceList"><div class="empty">Cihaz listesi bekleniyor...</div></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+</div>
+
+<script>
+var client = null;
+var connected = false;
+var lastDevicesData = null;
+
+var CONN_STORAGE_KEY = 'uzaktanKontrolBaglanti';
+
+function saveConnSettings(host, port, wss, user, pass){
+  try{
+    localStorage.setItem(CONN_STORAGE_KEY, JSON.stringify({
+      host: host, port: port, wss: wss, user: user, pass: pass
+    }));
+  }catch(e){ /* localStorage yoksa/erisilemezse sessizce gec */ }
+}
+
+function loadConnSettings(){
+  try{
+    var raw = localStorage.getItem(CONN_STORAGE_KEY);
+    if(!raw) return;
+    var s = JSON.parse(raw);
+    if(s.host) document.getElementById('mHost').value = s.host;
+    if(s.port) document.getElementById('mPort').value = s.port;
+    if(s.wss)  document.getElementById('mWss').value = s.wss;
+    if(s.user) document.getElementById('mUser').value = s.user;
+    if(s.pass) document.getElementById('mPass').value = s.pass;
+  }catch(e){ /* bozuk veri varsa sessizce gec */ }
+}
+loadConnSettings();
+
+function showTab(name){
+  document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});
+  document.getElementById('tabAc').classList.remove('show');
+  document.getElementById('tabRc5').classList.remove('show');
+  document.getElementById('tabDev').classList.remove('show');
+  var idx = {ac:0, rc5:1, dev:2}[name];
+  document.querySelectorAll('.tab')[idx].classList.add('active');
+  document.getElementById({ac:'tabAc', rc5:'tabRc5', dev:'tabDev'}[name]).classList.add('show');
+}
+
+function toast(msg){
+  var t = document.getElementById('toast');
+  t.innerText = msg;
+  t.classList.add('show');
+  setTimeout(function(){ t.classList.remove('show'); }, 2200);
+}
+
+function setStatus(state, text){
+  var dot = document.getElementById('dot');
+  dot.classList.remove('on','err');
+  if(state==='on') dot.classList.add('on');
+  if(state==='err') dot.classList.add('err');
+  document.getElementById('brandSub').innerText = text;
+  document.getElementById('statusLine').innerText = text;
+}
+
+function doConnect(){
+  var host = document.getElementById('mHost').value.trim();
+  var port = document.getElementById('mPort').value.trim();
+  var wss  = document.getElementById('mWss').value;
+  var user = document.getElementById('mUser').value;
+  var pass = document.getElementById('mPass').value;
+
+  if(!host){ toast('Host adresini gir'); return; }
+  if(!pass){ toast('Şifre gerekli'); return; }
+
+  saveConnSettings(host, port, wss, user, pass);
+
+  var protocol = (wss === 'evet') ? 'wss' : 'ws';
+  var url = protocol + '://' + host + ':' + port + '/mqtt';
+
+  setStatus('', 'Bağlanılıyor...');
+  document.getElementById('connectBtn').disabled = true;
+
+  try{
+    if(client){ client.end(true); }
+    client = mqtt.connect(url, {
+      username: user, password: pass,
+      clientId: 'webctrl-' + Math.random().toString(16).slice(2),
+      connectTimeout: 8000, reconnectPeriod: 4000
+    });
+  }catch(e){
+    setStatus('err', 'Bağlantı hatası: ' + e.message);
+    document.getElementById('connectBtn').disabled = false;
+    return;
+  }
+
+  client.on('connect', function(){
+    connected = true;
+    document.getElementById('connectBtn').disabled = false;
+    document.getElementById('connectBtn').innerText = 'Bağlandı ✓';
+    setStatus('on', 'Bağlı');
+    toast('MQTT bağlantısı kuruldu');
+    client.subscribe('klima/status');
+    client.subscribe('klima/devices');
+    client.publish('klima/cmd', 'getstate=1');
+  });
+
+  client.on('message', function(topic, payloadBuf){
+    var payload = payloadBuf.toString();
+    if(topic === 'klima/status') updateAcStatusDisplay(payload);
+    else if(topic === 'klima/devices') updateDevicesDisplay(payload);
+  });
+
+  client.on('error', function(err){
+    setStatus('err', 'Hata: ' + err.message);
+    document.getElementById('connectBtn').disabled = false;
+  });
+
+  client.on('close', function(){
+    if(connected) setStatus('err', 'Bağlantı koptu, yeniden deneniyor...');
+    connected = false;
+    document.getElementById('connectBtn').innerText = 'Bağlan';
+  });
+}
+
+function requireConnection(){
+  if(!connected){ toast('Önce MQTT\'ye bağlan'); return false; }
+  return true;
+}
+
+function publish(payload){
+  if(!requireConnection()) return;
+  client.publish('klima/cmd', payload);
+  toast('Gönderildi: ' + payload);
+}
+
+function sendAc(payload){ publish(payload); }
+function sendRc5(cmd){ publish('rc5=' + cmd); }
+function sendDevBtn(devId, btnId){ publish('devbtn=' + devId + ':' + btnId); }
+
+function setTimer(type){
+  var h = document.getElementById(type + 'H').value || 0;
+  var m = document.getElementById(type + 'M').value || 0;
+  publish('timerset=' + type + ':' + h + ':' + m);
+}
+function cancelTimer(type){ publish('timercancel=' + type); }
+
+function addSchedule(){
+  var time = document.getElementById('schedTime').value;
+  if(!time){ toast('Saat seç'); return; }
+  var parts = time.split(':');
+  var isOn = document.getElementById('schedAction').value === 'on' ? 1 : 0;
+  var mode = document.getElementById('schedMode').value;
+  var temp = document.getElementById('schedTemp').value;
+  var fan = document.getElementById('schedFan').value;
+  var daysMask = 0;
+  document.querySelectorAll('#dayPick input').forEach(function(cb){
+    if(cb.checked) daysMask |= (1 << parseInt(cb.getAttribute('data-day')));
+  });
+  var payload = 'schedadd=' + parts[0] + ':' + parts[1] + ':' + isOn + ':' + mode + ':' + temp + ':' + fan + ':' + daysMask;
+  publish(payload);
+}
+function delSchedule(idx){ publish('scheddel=' + idx); }
+
+var acModeNames = {0:'Soğutma', 4:'Isıtma', 1:'Nem Alma', 3:'Otomatik'};
+var acFanNames = ['Düşük','Orta','Yüksek','Otomatik'];
+
+function updateAcStatusDisplay(payload){
+  var parts = payload.split('&');
+  var data = {};
+  parts.forEach(function(p){
+    var kv = p.split('=');
+    if(kv.length===2) data[kv[0]] = kv[1];
+  });
+  if('power' in data) document.getElementById('acPowerLbl').innerText = (data.power==='1') ? 'AÇIK' : 'KAPALI';
+  if('mode' in data) document.getElementById('acModeLbl').innerText = acModeNames[data.mode] || data.mode;
+  if('temp' in data) document.getElementById('acTempLbl').innerText = data.temp;
+  if('fan' in data) document.getElementById('acFanLbl').innerText = acFanNames[data.fan] || data.fan;
+
+  var offMin = parseInt(data.offtimer);
+  var onMin = parseInt(data.ontimer);
+  var lines = [];
+  if(!isNaN(offMin) && offMin >= 0) lines.push('Kapanma: ' + Math.floor(offMin/60) + 'sa ' + (offMin%60) + 'dk kaldı');
+  if(!isNaN(onMin) && onMin >= 0) lines.push('Açılma: ' + Math.floor(onMin/60) + 'sa ' + (onMin%60) + 'dk kaldı');
+  document.getElementById('timerStatusLbl').innerText = lines.length ? lines.join(' · ') : 'Aktif zamanlayıcı yok';
+}
+
+var dayShort = ['Paz','Pzt','Sal','Çar','Per','Cum','Cmt'];
+function daysMaskToText(mask){
+  if(mask === 0x7F) return 'Her gün';
+  if(mask === 0) return 'tek seferlik';
+  var out = [];
+  for(var i=0;i<7;i++) if(mask & (1<<i)) out.push(dayShort[i]);
+  return out.join(',');
+}
+
+function updateDevicesDisplay(payload){
+  var data;
+  try{ data = JSON.parse(payload); }catch(e){ return; }
+  lastDevicesData = data;
+
+  var rc5Extra = (data.devices || []).find(function(d){ return d.id === 'rc5extra'; });
+  var rc5Html = '';
+  if(rc5Extra && rc5Extra.buttons.length){
+    rc5Html = '<div class="grid2">';
+    rc5Extra.buttons.forEach(function(b){
+      rc5Html += '<button class="btn" style="background:' + b.color + '" onclick="sendDevBtn(\'rc5extra\',\'' + b.id + '\')">' + b.label + '</button>';
+    });
+    rc5Html += '</div>';
+  } else {
+    rc5Html = '<div class="empty">Henüz ek tuş yok.</div>';
+  }
+  document.getElementById('rc5ExtraList').innerHTML = rc5Html;
+
+  var realDevices = (data.devices || []).filter(function(d){ return d.id !== 'rc5extra'; });
+  var devHtml = '';
+  if(realDevices.length === 0){
+    devHtml = '<div class="empty">Henüz eklenmiş özel cihaz yok.</div>';
+  } else {
+    realDevices.forEach(function(d){
+      devHtml += '<h3>' + d.name + '</h3>';
+      if(d.buttons.length === 0){
+        devHtml += '<div class="empty">Bu cihazda buton yok.</div>';
+      } else {
+        devHtml += '<div class="grid2">';
+        d.buttons.forEach(function(b){
+          devHtml += '<button class="btn" style="background:' + b.color + '" onclick="sendDevBtn(\'' + d.id + '\',\'' + b.id + '\')">' + b.label + '</button>';
+        });
+        devHtml += '</div>';
+      }
+    });
+  }
+  document.getElementById('deviceList').innerHTML = devHtml;
+
+  var schedHtml = '';
+  if(!data.schedules || data.schedules.length === 0){
+    schedHtml = '<div class="empty">Henüz görev yok.</div>';
+  } else {
+    data.schedules.forEach(function(s){
+      var hh = (s.hour<10?'0':'')+s.hour, mm = (s.minute<10?'0':'')+s.minute;
+      var desc = s.isOn ? (acModeNames[s.mode]+', '+s.temp+'°C, '+acFanNames[s.fanIndex]) : 'Kapat';
+      schedHtml += '<div class="listRow"><span class="lbl">' + hh+':'+mm + ' - ' + desc +
+        ' [' + daysMaskToText(s.daysMask) + ']</span>' +
+        '<span class="del" onclick="delSchedule(' + s.idx + ')">×</span></div>';
+    });
+  }
+  document.getElementById('schedList').innerHTML = schedHtml;
+}
+
+// ================= Service Worker kaydı (PWA/offline kabuk) =================
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('service-worker.js').catch(function (err) {
+      console.warn('Service worker kaydı başarısız:', err);
+    });
+  });
+}
+</script>
+</body>
+</html>

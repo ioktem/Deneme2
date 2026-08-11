@@ -15,9 +15,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Klima Kontrol">
-<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
-<link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
 
 <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
 <style>
@@ -142,6 +142,7 @@
     <label>Şifre</label>
     <input type="password" id="mPass">
     <button class="btn primary full" id="connectBtn" onclick="doConnect()">Bağlan</button>
+    <button class="btn full" id="disconnectBtn" style="background:#e5484d;display:none;" onclick="doDisconnect()">Bağlantıyı Kes</button>
     <div class="statusline" id="statusLine">Ayarları gir ve "Bağlan"a bas.</div>
     <div class="lockNote">Menüde gezinmek için bağlanmana gerek yok — sadece komut göndermek
       (düğmelere basmak) için bağlantı gerekiyor. ESP tarafındaki MQTT ayarlarıyla
@@ -160,6 +161,7 @@
       <h2>Durum</h2>
       <div class="statusline">Güç: <b id="acPowerLbl">-</b> · Mod: <b id="acModeLbl">-</b> ·
         Sıcaklık: <b id="acTempLbl">-</b>°C · Fan: <b id="acFanLbl">-</b></div>
+      <button class="btn full small" style="margin-bottom:10px" onclick="requestFullState()">🔄 Durumu / Görevleri Yenile</button>
 
       <div class="grid2">
         <button class="btn" style="background:#2f8f46" onclick="sendAc('power=1')">Aç</button>
@@ -354,6 +356,8 @@ function setStatus(state, text){
   document.getElementById('statusLine').innerText = text;
 }
 
+var manualDisconnect = false;
+
 function doConnect(){
   var host = document.getElementById('mHost').value.trim();
   var port = document.getElementById('mPort').value.trim();
@@ -369,6 +373,7 @@ function doConnect(){
   var protocol = (wss === 'evet') ? 'wss' : 'ws';
   var url = protocol + '://' + host + ':' + port + '/mqtt';
 
+  manualDisconnect = false;
   setStatus('', 'Bağlanılıyor...');
   document.getElementById('connectBtn').disabled = true;
 
@@ -387,13 +392,14 @@ function doConnect(){
 
   client.on('connect', function(){
     connected = true;
-    document.getElementById('connectBtn').disabled = false;
+    document.getElementById('connectBtn').disabled = true;
     document.getElementById('connectBtn').innerText = 'Bağlandı ✓';
+    document.getElementById('disconnectBtn').style.display = 'block';
     setStatus('on', 'Bağlı');
     toast('MQTT bağlantısı kuruldu');
     client.subscribe('klima/status');
     client.subscribe('klima/devices');
-    client.publish('klima/cmd', 'getstate=1');
+    requestFullState();
   });
 
   client.on('message', function(topic, payloadBuf){
@@ -408,10 +414,45 @@ function doConnect(){
   });
 
   client.on('close', function(){
-    if(connected) setStatus('err', 'Bağlantı koptu, yeniden deneniyor...');
     connected = false;
-    document.getElementById('connectBtn').innerText = 'Bağlan';
+    if(manualDisconnect){
+      setStatus('', 'Bağlantı kesildi');
+      document.getElementById('connectBtn').disabled = false;
+      document.getElementById('connectBtn').innerText = 'Bağlan';
+      document.getElementById('disconnectBtn').style.display = 'none';
+    } else {
+      // Beklenmedik kopma - MQTT.js kendiliğinden (reconnectPeriod) tekrar
+      // deneyecek. Kes butonunu gösterip birakiyoruz ki kullanici isterse
+      // otomatik yeniden deneme dongusunu de iptal edebilsin.
+      setStatus('err', 'Bağlantı koptu, yeniden deneniyor...');
+      document.getElementById('connectBtn').innerText = 'Bağlan';
+    }
   });
+}
+
+function doDisconnect(){
+  manualDisconnect = true;
+  if(client){ client.end(true); }
+  connected = false;
+  setStatus('', 'Bağlantı kesildi');
+  document.getElementById('connectBtn').disabled = false;
+  document.getElementById('connectBtn').innerText = 'Bağlan';
+  document.getElementById('disconnectBtn').style.display = 'none';
+  toast('MQTT bağlantısı kesildi');
+}
+
+// Cihaz/görev listesini ve klima durumunu ESP'den ister. Baglanti kurulunca
+// otomatik cagrilir; ayrica "Yenile" butonuyla elle de tetiklenebilir.
+// Ilk istekten kisa bir sure sonra hala veri gelmemisse (ör. ilk paket
+// kaybolduysa) bir kez daha otomatik dener.
+function requestFullState(){
+  if(!requireConnection()) return;
+  client.publish('klima/cmd', 'getstate=1');
+  setTimeout(function(){
+    if(connected && !lastDevicesData){
+      client.publish('klima/cmd', 'getstate=1');
+    }
+  }, 4000);
 }
 
 function requireConnection(){
